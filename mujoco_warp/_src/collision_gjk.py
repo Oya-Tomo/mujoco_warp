@@ -202,7 +202,6 @@ def support(geom: Geom, geomtype: int, dir: wp.vec3) -> SupportPoint:
   elif geomtype == GeomType.HFIELD:
     max_dist = float(FLOAT_MIN)
     # TODO(kbayes): Support edge prisms
-    sp.vertex_index = wp.where(dir[2] < 0.0, -2, -3)
     for i in range(6):
       vert = geom.polyvert[i]
       dist = wp.dot(vert, dir)
@@ -966,9 +965,7 @@ def _add_edge(pt: Polytope, e1: int, e2: int) -> int:
 
 
 @wp.func
-def _epa_witness(
-  pt: Polytope, geom1: Geom, geom2: Geom, geomtype1: int, geomtype2: int, face_idx: int
-) -> Tuple[wp.vec3, wp.vec3, float]:
+def _epa_witness(pt: Polytope, face_idx: int) -> Tuple[wp.vec3, wp.vec3, float]:
   face = _get_face_verts(pt.face[face_idx])
   # compute affine coordinates for witness points on plane defined by face
   v1 = pt.vert[2 * face[0]] - pt.vert[2 * face[0] + 1]
@@ -988,44 +985,6 @@ def _epa_witness(
   x2[0] = v1[0] * l1 + v2[0] * l2 + v3[0] * l3
   x2[1] = v1[1] * l1 + v2[1] * l2 + v3[1] * l3
   x2[2] = v1[2] * l1 + v2[2] * l2 + v3[2] * l3
-
-  # correct witness points for hfield geoms
-  i1 = pt.vert_index[2 * face[0]]
-  i2 = pt.vert_index[2 * face[1]]
-  i3 = pt.vert_index[2 * face[2]]
-  if geomtype1 == GeomType.HFIELD and (i1 != i2 or i1 != i3):
-    # TODO(kbayes): Fix case where geom2 is near bottom of height field or "extreme" prism heights
-    n = wp.vec3(0.0, 0.0, 1.0)
-
-    # height field prism vertices
-    a = geom1.polyvert[3]
-    b = geom1.polyvert[4]
-    c = geom1.polyvert[5]
-
-    # TODO(kbayes): Support cases where geom2 is larger than the height field
-    if geomtype2 == GeomType.CAPSULE or geomtype2 == GeomType.SPHERE:
-      radius = geom2.size[0]
-      margin = geom2.margin
-      geom2.margin = 0.0
-      geom2.size = wp.vec3(0.0, geom2.size[1], geom2.size[2])
-      sp = support(geom2, geomtype2, x2)
-      x2 = sp.point - (0.5 * margin + radius) * n
-      geom2.size[0] = radius
-      geom2.margin = margin
-    else:
-      x2 = wp.normalize(x2)
-      sp = support(geom2, geomtype2, x2)
-      x2 = sp.point
-
-    coordinates2 = _tri_affine_coord(a, b, c, x2)
-    if coordinates2[0] > 0.0 and coordinates2[1] > 0.0 and coordinates2[2] > 0.0:
-      x1 = coordinates2[0] * a + coordinates2[1] * b + coordinates2[2] * c
-    else:
-      p = c
-      p = wp.where(coordinates2[1] > 0, b, p)
-      p = wp.where(coordinates2[0] > 0, a, p)
-      x1 = x2 - wp.dot(x2 - p, n) * n
-    return x1, x2, -wp.norm_l2(x1 - x2)
 
   # face on geom 1
   v1 = pt.vert[2 * face[0]]
@@ -1478,7 +1437,7 @@ def _epa(
 
   # return from valid face
   if idx > -1:
-    x1, x2, dist = _epa_witness(pt, geom1, geom2, geomtype1, geomtype2, idx)
+    x1, x2, dist = _epa_witness(pt, idx)
     return dist, x1, x2, idx
   return 0.0, wp.vec3(), wp.vec3(), -1
 
@@ -2452,41 +2411,10 @@ def multicontact(
 
 
 @wp.func
-def _inflate(
-  result: GJKResult, geom1: Geom, geom2: Geom, geomtype1: int, geomtype2: int, margin1: float, margin2: float
-) -> Tuple[float, wp.vec3, wp.vec3]:
+def _inflate(result: GJKResult, margin1: float, margin2: float) -> Tuple[float, wp.vec3, wp.vec3]:
   dist = result.dist
   x1 = result.x1
   x2 = result.x2
-
-  if geomtype1 == GeomType.HFIELD:
-    v = result.simplex_index1[0]
-    is_side = bool(False)
-    for i in range(result.dim):
-      if result.simplex_index1[i] != v:
-        is_side = True
-        break
-
-    if is_side:
-      n = wp.vec3(0.0, 0.0, 1.0)
-      sp = support(geom2, geomtype2, x2)
-      x2 = sp.point - margin2 * n
-
-      # height field prism vertices
-      a = geom1.polyvert[3]
-      b = geom1.polyvert[4]
-      c = geom1.polyvert[5]
-
-      coordinates = _tri_affine_coord(a, b, c, x2)
-      if coordinates[0] > 0.0 and coordinates[1] > 0.0 and coordinates[2] > 0.0:
-        x1 = coordinates[0] * a + coordinates[1] * b + coordinates[2] * c
-      else:
-        p = c
-        p = wp.where(coordinates[1] > 0.0, b, p)
-        p = wp.where(coordinates[0] > 0.0, a, p)
-        x1 = x2 - wp.dot(x2 - p, n) * n
-      dist = -wp.norm_l2(x1 - x2)
-      return dist, x1, x2
 
   n = wp.normalize(x2 - x1)
   if margin1 > 0.0:
@@ -2548,7 +2476,7 @@ def gjk_phase(
     if result.dist > tolerance:
       if result.dist == FLOAT_MAX:
         return False, result.dist, 1, result.x1, result.x2, empty, geom1, geom2
-      dist, x1, x2 = _inflate(result, geom1, geom2, geomtype1, geomtype2, full_margin1, full_margin2)
+      dist, x1, x2 = _inflate(result, full_margin1, full_margin2)
       return False, dist, 1, x1, x2, empty, geom1, geom2
 
     # deep penetration: reset initial conditions and rerun GJK + EPA

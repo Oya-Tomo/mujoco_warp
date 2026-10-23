@@ -1179,6 +1179,50 @@ class CollisionTest(parameterized.TestCase):
 
     self.assertEqual(d.nacon.numpy()[0], mjd.ncon)
 
+  @parameterized.parameters(
+    '<geom type="sphere" size=".022"/>',
+    '<geom type="capsule" size=".012 .03"/>',
+    '<geom type="cylinder" size=".012 .03"/>',
+    '<geom type="box" size=".05 .012 .017"/>',
+  )
+  def test_hfield_cliff_side_contact(self, geom):
+    """Tests that a geom beside a cliff touches the side of the prisms as in MuJoCo."""
+    # The first elevation row lies at +y, so the pit spans -y. The geom hangs 1 m down the pit,
+    # 2 cm past the edge of the ground, where it grazes the steep side of the prisms between the
+    # ground and the pit floor.
+    mjm, mjd, m, d = test_data.fixture(
+      xml=f"""
+      <mujoco>
+        <asset>
+          <hfield name="terrain" nrow="6" ncol="6" size=".125 .125 2.5 1"
+          elevation="1 1 1 1 1 1
+                     1 1 1 1 1 1
+                     1 1 1 1 1 1
+                     0 0 0 0 0 0
+                     0 0 0 0 0 0
+                     0 0 0 0 0 0"/>
+        </asset>
+        <worldbody>
+          <geom type="hfield" hfield="terrain" pos="0 0 -2.5"/>
+          <body pos="0 .005 -1">
+            <freejoint/>
+            {geom}
+          </body>
+        </worldbody>
+      </mujoco>
+      """
+    )
+
+    mujoco.mj_collision(mjm, mjd)
+    mjw.collision(m, d)
+
+    nacon = d.nacon.numpy()[0]
+    self.assertGreater(mjd.ncon, 0)
+    self.assertGreater(nacon, 0)
+    np.testing.assert_allclose(d.contact.dist.numpy()[:nacon].min(), mjd.contact.dist.min(), atol=2e-3)
+    # the side faces the pit, so no contact pushes the geom down
+    np.testing.assert_array_less(-0.5, d.contact.frame.numpy()[:nacon, 0, 2])
+
   def test_hfield_maxconpair(self):
     _XML = """
     <mujoco>
