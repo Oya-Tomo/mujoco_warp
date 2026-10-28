@@ -2811,7 +2811,35 @@ class FlexCollisionTest(parameterized.TestCase):
 
   @parameterized.parameters(1, 2)
   def test_flex_fps_capping(self, nworld):
-    """Test that flex-flex contacts are limited to MJ_MAXCONPAIR (50) via parallel FPS."""
+    """Test that contacts between interpolated flexes are limited to MJ_MAXCONPAIR (50) by FPS."""
+    _, _, m, d = test_data.fixture(
+      xml="""
+      <mujoco>
+        <worldbody>
+          <flexcomp name="cube1" type="grid" count="4 4 4" spacing=".05 .05 .05" pos="0 0 0"
+                    radius=".01" dim="3" mass="1" dof="trilinear">
+            <contact selfcollide="none" contype="1" conaffinity="1"/>
+          </flexcomp>
+          <flexcomp name="cube2" type="grid" count="4 4 4" spacing=".05 .05 .05" pos="0 0 0.12"
+                    radius=".01" dim="3" mass="1" dof="trilinear">
+            <contact selfcollide="none" contype="1" conaffinity="1"/>
+          </flexcomp>
+        </worldbody>
+      </mujoco>
+      """,
+      nworld=nworld,
+      nconmax=4000,
+    )
+    d.nacon.fill_(-1)
+    d.contact.dist.fill_(wp.inf)
+    mjw.kinematics(m, d)
+    mjw.collision(m, d)
+    nacon = int(d.nacon.numpy()[0])
+    self.assertEqual(nacon, types.MJ_MAXCONPAIR * nworld)
+
+  @parameterized.parameters(1, 2)
+  def test_flex_flex_contacts_not_capped(self, nworld):
+    """Test that contacts between flexes with vertex dofs are not limited to MJ_MAXCONPAIR (50)."""
     _, _, m, d = test_data.fixture(
       xml="""
       <mujoco>
@@ -2831,11 +2859,36 @@ class FlexCollisionTest(parameterized.TestCase):
       nconmax=1500,
     )
     d.nacon.fill_(-1)
-    d.contact.dist.fill_(wp.inf)
     mjw.kinematics(m, d)
     mjw.collision(m, d)
-    nacon = int(d.nacon.numpy()[0])
-    self.assertEqual(nacon, types.MJ_MAXCONPAIR * nworld)
+    worldid = d.contact.worldid.numpy()[: d.nacon.numpy()[0]]
+    for w in range(nworld):
+      self.assertGreater(np.sum(worldid == w), types.MJ_MAXCONPAIR)
+
+  @parameterized.parameters(1, 2)
+  def test_self_collision_contacts_not_capped(self, nworld):
+    """Test that self-collision contacts of a folded cloth are not limited to MJ_MAXCONPAIR (50)."""
+    xml = """
+    <mujoco>
+      <worldbody>
+        <flexcomp name="cloth" type="grid" count="8 8 1" spacing=".05 .05 .05" radius=".005" dim="2" mass=".5">
+          <contact selfcollide="auto" contype="1" conaffinity="1"/>
+        </flexcomp>
+      </worldbody>
+    </mujoco>
+    """
+    _, _, m, d = test_data.fixture(xml=xml, nworld=nworld, nconmax=1500)
+    xpos = d.flexvert_xpos.numpy()
+    upper = xpos[0, :, 0] > 0
+    xpos[:, upper, 0] *= -1
+    xpos[:, upper, 2] = 0.009
+    d.flexvert_xpos.assign(xpos)
+
+    d.nacon.fill_(-1)
+    mjw.collision(m, d)
+    worldid = d.contact.worldid.numpy()[: d.nacon.numpy()[0]]
+    for w in range(nworld):
+      self.assertGreater(np.sum(worldid == w), types.MJ_MAXCONPAIR)
 
   def test_flex_sat_prefilter_conservative(self):
     """Test that broadphase SAT prefilter is conservative and yields identical contacts."""
@@ -2907,12 +2960,12 @@ class FlexCollisionTest(parameterized.TestCase):
       xml="""
       <mujoco>
         <worldbody>
-          <flexcomp name="cloth1" type="grid" count="8 8 1" spacing=".05 .05 .05" pos="0 0 0"
-                    radius=".02" dim="2" mass=".5">
+          <flexcomp name="cube1" type="grid" count="4 4 4" spacing=".05 .05 .05" pos="0 0 0"
+                    radius=".01" dim="3" mass="1" dof="trilinear">
             <contact selfcollide="none" contype="1" conaffinity="1"/>
           </flexcomp>
-          <flexcomp name="cloth2" type="grid" count="8 8 1" spacing=".05 .05 .05" pos="0 0 0.01"
-                    radius=".02" dim="2" mass=".5">
+          <flexcomp name="cube2" type="grid" count="4 4 4" spacing=".05 .05 .05" pos="0 0 0.12"
+                    radius=".01" dim="3" mass="1" dof="trilinear">
             <contact selfcollide="none" contype="1" conaffinity="1"/>
           </flexcomp>
         </worldbody>
@@ -2920,7 +2973,7 @@ class FlexCollisionTest(parameterized.TestCase):
       """,
       qpos_noise=0.005,
       nworld=1,
-      nconmax=1500,
+      nconmax=4000,
     )
     d.nacon.fill_(-1)
     d.contact.dist.fill_(wp.inf)

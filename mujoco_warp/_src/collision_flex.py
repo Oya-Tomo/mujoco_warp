@@ -2127,6 +2127,7 @@ def _compare_candidate(
 # Note: MuJoCo Warp uses proximity deduplication (1 mm threshold) instead of
 # Farthest Point Sampling (FPS) limited to mjMAXCONPAIR for flex-geom collisions.
 # Flex self-collision and flex-flex collision apply proximity deduplication before FPS.
+# As in MuJoCo, FPS only reduces groups whose flexes are all rigid or interpolated.
 # TODO(thowell): Figure out an FPS version that utilizes a configurable mj_maxconpair.
 @wp.kernel
 def _filter_flex_candidates_sorted(
@@ -2498,8 +2499,23 @@ def _tie_break_fps(
   return curr_idx < sel_idx
 
 
+@wp.func
+def _flex_reducible(
+  # Model:
+  flex_interp: wp.array[int],
+  flex_rigid: wp.array[bool],
+  # In:
+  flexid: int,
+) -> bool:
+  """Returns True if the flex is rigid or interpolated, so its contacts may be reduced."""
+  return flex_rigid[flexid] or flex_interp[flexid] != 0
+
+
 @wp.kernel
 def _parallel_fps_find_seed(
+  # Model:
+  flex_interp: wp.array[int],
+  flex_rigid: wp.array[bool],
   # In:
   flex_group_start_indices_in: wp.array[int],
   flex_num_groups_in: wp.array[int],
@@ -2509,6 +2525,7 @@ def _parallel_fps_find_seed(
   cand_dist: wp.array[float],
   cand_elem: wp.array[wp.vec2i],
   cand_geom: wp.array[wp.vec2i],
+  cand_flex: wp.array[wp.vec2i],
   # Out:
   scratch_dist_out: wp.array2d[float],
   scratch_cidx_out: wp.array2d[int],
@@ -2526,7 +2543,12 @@ def _parallel_fps_find_seed(
     return
 
   first_cand_idx = sort_val[g_start]
-  if cand_geom[first_cand_idx][0] >= 0:
+  reducible = False
+  if cand_geom[first_cand_idx][0] < 0:
+    f1 = cand_flex[first_cand_idx][0]
+    f2 = cand_flex[first_cand_idx][1]
+    reducible = _flex_reducible(flex_interp, flex_rigid, f1) and _flex_reducible(flex_interp, flex_rigid, f2)
+  if not reducible:
     scratch_count_out[g, tid] = 0
     scratch_cidx_out[g, tid] = -1
     return
@@ -2959,7 +2981,7 @@ def _run_filter_flex_fps(
   ws: FlexWorkspace,
   nmax_groups: int,
 ):
-  """Applies Far Point Sampling to limit contact points per group to MJ_MAXCONPAIR in parallel."""
+  """Applies Far Point Sampling to limit reducible groups to MJ_MAXCONPAIR contacts in parallel."""
   wp.launch(
     _parallel_fps_init_condition,
     dim=1,
@@ -2974,6 +2996,8 @@ def _run_filter_flex_fps(
     _parallel_fps_find_seed,
     dim=(nmax_groups, _FPS_BLOCK_SIZE),
     inputs=[
+      m.flex_interp,
+      m.flex_rigid,
       ws.flex_group_start_indices,
       ws.flex_num_groups,
       ws.ncand,
@@ -2982,6 +3006,7 @@ def _run_filter_flex_fps(
       ws.dist,
       ws.elem,
       ws.geom,
+      ws.flex,
       ws.fps_scratch_dist,
       ws.fps_scratch_cidx,
       ws.fps_scratch_count,
