@@ -43,6 +43,8 @@ MIN_DIST4 = 1e-17
 # minimal tolerance for EPA
 MIN_EPATOL = 1e-7
 
+AFFINE_SUM_TOL = 1e-5
+
 FACE_TOL = wp.static(math.cos(0.0889))
 EDGE_TOL = wp.static(math.sin(0.0889))
 
@@ -965,14 +967,21 @@ def _add_edge(pt: Polytope, e1: int, e2: int) -> int:
 
 
 @wp.func
-def _epa_witness(pt: Polytope, face_idx: int) -> Tuple[wp.vec3, wp.vec3, float]:
-  face = _get_face_verts(pt.face[face_idx])
-  # compute affine coordinates for witness points on plane defined by face
-  v1 = pt.vert[2 * face[0]] - pt.vert[2 * face[0] + 1]
-  v2 = pt.vert[2 * face[1]] - pt.vert[2 * face[1] + 1]
-  v3 = pt.vert[2 * face[2]] - pt.vert[2 * face[2] + 1]
+def _is_degenerate_face(coordinates: wp.vec3) -> bool:
+  """Return true if a face is too thin for its affine coordinates to sum to one."""
+  return wp.abs(coordinates[0] + coordinates[1] + coordinates[2] - 1.0) > AFFINE_SUM_TOL
 
-  coordinates = _tri_affine_coord(v1, v2, v3, pt.face_pr[face_idx])
+
+@wp.func
+def _support_witness(geom2: Geom, geomtype2: int, face_pr: wp.vec3) -> Tuple[wp.vec3, wp.vec3]:
+  """Return witness points from the support point of geom 2 against the face normal."""
+  x2 = support(geom2, geomtype2, -wp.normalize(face_pr)).point
+  return x2 + face_pr, x2
+
+
+@wp.func
+def _face_witness(pt: Polytope, face: wp.vec3i, coordinates: wp.vec3) -> Tuple[wp.vec3, wp.vec3]:
+  """Return witness points interpolated on the face by its affine coordinates."""
   l1 = coordinates[0]
   l2 = coordinates[1]
   l3 = coordinates[2]
@@ -994,6 +1003,23 @@ def _epa_witness(pt: Polytope, face_idx: int) -> Tuple[wp.vec3, wp.vec3, float]:
   x1[0] = v1[0] * l1 + v2[0] * l2 + v3[0] * l3
   x1[1] = v1[1] * l1 + v2[1] * l2 + v3[1] * l3
   x1[2] = v1[2] * l1 + v2[2] * l2 + v3[2] * l3
+
+  return x1, x2
+
+
+@wp.func
+def _epa_witness(pt: Polytope, geom2: Geom, geomtype2: int, face_idx: int) -> Tuple[wp.vec3, wp.vec3, float]:
+  face = _get_face_verts(pt.face[face_idx])
+  # compute affine coordinates for witness points on plane defined by face
+  v1 = pt.vert[2 * face[0]] - pt.vert[2 * face[0] + 1]
+  v2 = pt.vert[2 * face[1]] - pt.vert[2 * face[1] + 1]
+  v3 = pt.vert[2 * face[2]] - pt.vert[2 * face[2] + 1]
+  coordinates = _tri_affine_coord(v1, v2, v3, pt.face_pr[face_idx])
+
+  if _is_degenerate_face(coordinates):
+    x1, x2 = _support_witness(geom2, geomtype2, pt.face_pr[face_idx])
+  else:
+    x1, x2 = _face_witness(pt, face, coordinates)
 
   return x1, x2, -wp.sqrt(pt.face_norm2[face_idx])
 
@@ -1437,7 +1463,7 @@ def _epa(
 
   # return from valid face
   if idx > -1:
-    x1, x2, dist = _epa_witness(pt, idx)
+    x1, x2, dist = _epa_witness(pt, geom2, geomtype2, idx)
     return dist, x1, x2, idx
   return 0.0, wp.vec3(), wp.vec3(), -1
 

@@ -43,6 +43,7 @@ def _geom_dist(
   pos2: wp.vec3 | None = None,
   mat1: wp.mat33 | None = None,
   mat2: wp.mat33 | None = None,
+  prism1: mat63 | None = None,
   horizon_size: int | None = None,
   warn_overflow: bool = True,
   overflow_out: wp.array | None = None,
@@ -138,6 +139,8 @@ def _geom_dist(
     geom1.margin = margin
     geom1.graphadr = -1
     geom1.mesh_polyadr = -1
+    if wp.static(prism1 != None):
+      geom1.polyvert = prism1
 
     dataid1 = geom_dataid[0, gid1]  # kernel_analyzer: off
     if dataid1 >= 0 and geom_type[gid1] == GeomType.MESH:
@@ -1020,6 +1023,49 @@ class GJKTest(parameterized.TestCase):
     self.assertEqual(ncon, 2)
     np.testing.assert_allclose(x1, np.array([1.907368, -0.052973, 0.700000]), atol=1e-4)
     np.testing.assert_allclose(x2, np.array([1.300000, -0.052973, 0.700000]), atol=1e-4)
+
+  def test_hfield_prism_degenerate_face(self):
+    """Test witness points stay on the geoms when EPA ends on a degenerate face of a tall prism."""
+    _, _, m, d = test_data.fixture(
+      xml="""
+      <mujoco>
+        <asset>
+          <hfield name="terrain" nrow="2" ncol="2" size="1 1 1 1"/>
+        </asset>
+        <worldbody>
+          <geom type="hfield" hfield="terrain"/>
+          <body>
+            <freejoint/>
+            <geom type="cylinder" size=".011 .0325"/>
+          </body>
+        </worldbody>
+      </mujoco>
+      """
+    )
+    # fmt: off
+    prism = mat63(
+      -4.25, -20.95, -1.0,
+      -4.25, -21.0,  -1.0,
+      -4.2,  -20.95, -1.0,
+      -4.25, -20.95,  4.0,
+      -4.25, -21.0,   4.0,
+      -4.2,  -20.95,  4.0,
+    )
+    cylinder_rot = wp.mat33(
+      -0.2034414113,  0.9044784307,  0.3748735487,
+      -0.4347358048, -0.4265160859,  0.7931510806,
+       0.8772776723, -0.0016111797,  0.4799802601,
+    )
+    # fmt: on
+    prism_center = wp.vec3(-4.233333588, -20.96666718, 1.5)
+    cylinder_pos = wp.vec3(-4.25681591, -21.02607155, 3.984824419)
+
+    dist, ncon, x1, x2 = _geom_dist(m, d, 0, 1, pos1=prism_center, pos2=cylinder_pos, mat2=cylinder_rot, prism1=prism)
+
+    self.assertEqual(ncon, 1)
+    np.testing.assert_allclose(dist, -0.0064038, atol=1e-5)
+    np.testing.assert_allclose(x1 - x2, [0.0, dist, 0.0], atol=1e-5)
+    np.testing.assert_allclose(0.5 * (x1 + x2), [-4.24994, -20.9968, 3.99346], atol=1e-3)
 
   @parameterized.parameters(0.0, 0.1)
   def test_hfield_support(self, margin: float):
