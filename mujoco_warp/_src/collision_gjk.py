@@ -969,7 +969,7 @@ def _add_edge(pt: Polytope, e1: int, e2: int) -> int:
 @wp.func
 def _is_degenerate_face(coordinates: wp.vec3) -> bool:
   """Return true if a face is too thin for its affine coordinates to sum to one."""
-  return wp.abs(coordinates[0] + coordinates[1] + coordinates[2] - 1.0) > AFFINE_SUM_TOL
+  return not (wp.abs(coordinates[0] + coordinates[1] + coordinates[2] - 1.0) <= AFFINE_SUM_TOL)
 
 
 @wp.func

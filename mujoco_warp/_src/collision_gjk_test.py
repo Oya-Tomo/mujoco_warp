@@ -23,6 +23,7 @@ from mujoco_warp import GeomType
 from mujoco_warp import Model
 from mujoco_warp import test_data
 from mujoco_warp._src.collision_core import Geom
+from mujoco_warp._src.collision_gjk import _is_degenerate_face
 from mujoco_warp._src.collision_gjk import ccd
 from mujoco_warp._src.collision_gjk import multicontact
 from mujoco_warp._src.collision_gjk import support
@@ -1024,8 +1025,22 @@ class GJKTest(parameterized.TestCase):
     np.testing.assert_allclose(x1, np.array([1.907368, -0.052973, 0.700000]), atol=1e-4)
     np.testing.assert_allclose(x2, np.array([1.300000, -0.052973, 0.700000]), atol=1e-4)
 
+  @parameterized.parameters(
+    ((0.2, 0.3, 0.5), False),
+    ((1.3, -0.2, -0.1), False),
+    ((0.43, -2.33, -13.5), True),
+    ((float("nan"), 0.0, 0.0), True),
+    ((float("inf"), -float("inf"), 1.0), True),
+  )
+  def test_degenerate_face_coordinates(self, coordinates, degenerate):
+    """Test a face is degenerate when its affine coordinates do not sum to one or are not finite."""
+    self.assertEqual(_is_degenerate_face(wp.vec3(*coordinates)), degenerate)
+
   def test_hfield_prism_degenerate_face(self):
-    """Test witness points stay on the geoms when EPA ends on a degenerate face of a tall prism."""
+    """Test witness points stay on the geoms when EPA ends on a degenerate face of a tall prism.
+
+    The hfield asset is a placeholder: prism1 supplies the prism and prism_center only seeds GJK.
+    """
     _, _, m, d = test_data.fixture(
       xml="""
       <mujoco>
